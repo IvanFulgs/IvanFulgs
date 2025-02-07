@@ -1,1 +1,1 @@
-worker: python apetition.py
+worker: python main.py
