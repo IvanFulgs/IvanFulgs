@@ -1,1 +1,1 @@
-worker: python lpetition.py
+worker: python apetition.py
