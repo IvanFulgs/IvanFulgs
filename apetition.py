@@ -1,30 +1,27 @@
-import logging
-import openai
-import asyncio
+import requests
 import sqlite3
+import logging
 import os
-from aiogram import Bot, Dispatcher, types, Router
-from aiogram.filters import Command
-from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
+from aiogram.filters import Command
+from aiogram.types import ParseMode
+from aiogram.utils import executor
+from bs4 import BeautifulSoup
 
-# Завантажуємо змінні середовища з .env файлу
-load_dotenv()
-
-# Токен для Telegram бота
+# Ваш токен Telegram-бота
 TOKEN = os.getenv("BOT_TOKEN")
-# API ключ OpenAI
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
-router = Router()
+
+BASE_URL = "https://petition.president.gov.ua"
+TARGET_VOTES = 25000
+DB_FILE = "petitions.db"
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Ініціалізація бази даних для петицій
-DB_FILE = "petitions.db"
-
+# Ініціалізація бази даних
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -54,55 +51,37 @@ def get_petitions():
     conn.close()
     return [{"title": row[0], "votes_collected": row[1], "days_remaining": row[2], "url": row[3]} for row in petitions]
 
-def get_gpt_response(prompt: str, language: str = 'en') -> str:
-    if language == 'uk':
-        prompt = f"Please respond in Ukrainian: {prompt}"
-    elif language == 'de':
-        prompt = f"Please respond in German: {prompt}"
-    else:
-        prompt = f"Please respond in English: {prompt}"
+def get_petition_info(url: str):
+    response = requests.get(url)
+    if response.status_code != 200:
+        return None
+    
+    soup = BeautifulSoup(response.text, 'html.parser')
+    title = soup.select_one("h1").text.strip()
+    votes_collected = int(soup.select_one(".petition_votes_txt span").text.strip().replace(" ", ""))
+    days_remaining_text = soup.select_one(".votes_progress_label").text.strip()
+    days_remaining = int(''.join(filter(str.isdigit, days_remaining_text)))
+    
+    return {"title": title, "votes_collected": votes_collected, "days_remaining": days_remaining, "url": url}
 
-    try:
-        # Використовуємо нову модель gpt-3.5-turbo або gpt-4
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # Або "gpt-4" якщо хочете
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=150,
-            temperature=0.7
-        )
-        return response['choices'][0]['message']['content'].strip()
-    except Exception as e:
-        print(f"Error fetching GPT response: {e}")
-        return "Sorry, there was an error processing your request."
-
-# Команда /start (привітання)
-@router.message(Command("start"))
+# Команда /start
+@dp.message_handler(commands=["start"])
 async def start(message: types.Message):
+    await message.answer("Привіт! Я бот для управління петиціями. Використовуй команду /help для отримання списку команд.")
+
+# Команда /help
+@dp.message_handler(commands=["help"])
+async def help(message: types.Message):
     await message.answer(
-        "Привіт! Я бот, який може працювати з англійською, українською та німецькою мовами. "
-        "Ви також можете додавати петиції через /gpetition і переглядати список петицій через /lpetition."
+        "Ось доступні команди:\n"
+        "/start — Привітання\n"
+        "/help — Допомога\n"
+        "/gpetition <url> — Додати петицію\n"
+        "/lpetition — Переглянути список петицій"
     )
 
-# Обробка повідомлень (виклик нейронної мережі для генерації відповіді)
-@router.message()
-async def chat(message: types.Message):
-    user_message = message.text
-    language = 'en'
-
-    if any(c.isalpha() for c in user_message):
-        if "український" in user_message or "українська" in user_message:
-            language = 'uk'
-        elif "німецький" in user_message or "німецька" in user_message:
-            language = 'de'
-        else:
-            language = 'en'
-
-    # Отримуємо відповідь від GPT
-    response = await get_gpt_response(user_message, language)
-    await message.answer(response)
-
-# Команда /gpetition для додавання петиції
-@router.message(Command("gpetition"))
+# Команда /gpetition — додавання петиції
+@dp.message_handler(commands=["gpetition"])
 async def add_petition(message: types.Message):
     url = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
     if not url:
@@ -121,8 +100,8 @@ async def add_petition(message: types.Message):
     else:
         await message.answer("❌ Не вдалося отримати інформацію про петицію.")
 
-# Команда /lpetition для перегляду петицій
-@router.message(Command("lpetition"))
+# Команда /lpetition — перегляд списку петицій
+@dp.message_handler(commands=["lpetition"])
 async def list_petitions(message: types.Message):
     petitions = get_petitions()
     if not petitions:
@@ -135,25 +114,10 @@ async def list_petitions(message: types.Message):
     
     await message.answer(result, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
-# Отримання інформації про петицію
-def get_petition_info(url: str):
-    response = requests.get(url)
-    if response.status_code != 200:
-        return None
-    
-    soup = BeautifulSoup(response.text, 'html.parser')
-    title = soup.select_one("h1").text.strip()
-    votes_collected = int(soup.select_one(".petition_votes_txt span").text.strip().replace(" ", ""))
-    days_remaining_text = soup.select_one(".votes_progress_label").text.strip()
-    days_remaining = int(''.join(filter(str.isdigit, days_remaining_text)))
-    
-    return {"title": title, "votes_collected": votes_collected, "days_remaining": days_remaining, "url": url}
-
-# Запуск бота
 async def main():
     init_db()
-    dp.include_router(router)
-    await dp.start_polling(bot, skip_updates=True)
+    await dp.start_polling()
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
