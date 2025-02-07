@@ -54,8 +54,7 @@ def get_petitions():
     conn.close()
     return [{"title": row[0], "votes_collected": row[1], "days_remaining": row[2], "url": row[3]} for row in petitions]
 
-# Функція для взаємодії з OpenAI GPT
-async def get_gpt_response(prompt: str, language: str = 'en') -> str:
+def get_gpt_response(prompt: str, language: str = 'en') -> str:
     if language == 'uk':
         prompt = f"Please respond in Ukrainian: {prompt}"
     elif language == 'de':
@@ -64,15 +63,16 @@ async def get_gpt_response(prompt: str, language: str = 'en') -> str:
         prompt = f"Please respond in English: {prompt}"
 
     try:
-        response = openai.Completion.create(
-            model="text-davinci-003",
-            prompt=prompt,
+        # Використовуємо нову модель gpt-3.5-turbo або gpt-4
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",  # Або "gpt-4" якщо хочете
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=150,
             temperature=0.7
         )
-        return response.choices[0].text.strip()
+        return response['choices'][0]['message']['content'].strip()
     except Exception as e:
-        logging.error(f"Error fetching GPT response: {e}")
+        print(f"Error fetching GPT response: {e}")
         return "Sorry, there was an error processing your request."
 
 # Команда /start (привітання)
