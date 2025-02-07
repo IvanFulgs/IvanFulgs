@@ -1,28 +1,30 @@
-import requests
-import json
 import logging
+import openai
 import asyncio
 import sqlite3
-from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types, Router
-from aiogram.enums import ParseMode
-from aiogram.filters import Command
 import os
+from aiogram import Bot, Dispatcher, types, Router
+from aiogram.filters import Command
+from dotenv import load_dotenv
+from aiogram.enums import ParseMode
 
-# Ваш токен Telegram-бота
+# Завантажуємо змінні середовища з .env файлу
+load_dotenv()
+
+# Токен для Telegram бота
 TOKEN = os.getenv("BOT_TOKEN")
+# API ключ OpenAI
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
 
-BASE_URL = "https://petition.president.gov.ua"
-TARGET_VOTES = 25000
-DB_FILE = "petitions.db"
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Ініціалізація бази даних
+# Ініціалізація бази даних для петицій
+DB_FILE = "petitions.db"
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -35,7 +37,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Збереження петиції в БД
 def save_petition(petition):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -45,7 +46,6 @@ def save_petition(petition):
     conn.commit()
     conn.close()
 
-# Отримання всіх петицій з БД
 def get_petitions():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -54,39 +54,54 @@ def get_petitions():
     conn.close()
     return [{"title": row[0], "votes_collected": row[1], "days_remaining": row[2], "url": row[3]} for row in petitions]
 
-# Парсинг інформації про петицію
-def get_petition_info(url: str):
-    response = requests.get(url)
-    if response.status_code != 200:
-        return None
-    
-    soup = BeautifulSoup(response.text, 'html.parser')
-    title = soup.select_one("h1").text.strip()
-    votes_collected = int(soup.select_one(".petition_votes_txt span").text.strip().replace(" ", ""))
-    days_remaining_text = soup.select_one(".votes_progress_label").text.strip()
-    days_remaining = int(''.join(filter(str.isdigit, days_remaining_text)))
-    
-    return {"title": title, "votes_collected": votes_collected, "days_remaining": days_remaining, "url": url}
+# Функція для взаємодії з OpenAI GPT
+async def get_gpt_response(prompt: str, language: str = 'en') -> str:
+    if language == 'uk':
+        prompt = f"Please respond in Ukrainian: {prompt}"
+    elif language == 'de':
+        prompt = f"Please respond in German: {prompt}"
+    else:
+        prompt = f"Please respond in English: {prompt}"
 
-# Оновлення інформації у базі перед відправкою списку
-def update_petition_info():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+    try:
+        response = openai.Completion.create(
+            model="text-davinci-003",
+            prompt=prompt,
+            max_tokens=150,
+            temperature=0.7
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        logging.error(f"Error fetching GPT response: {e}")
+        return "Sorry, there was an error processing your request."
 
-    petitions = get_petitions()  # Отримуємо всі збережені петиції
+# Команда /start (привітання)
+@router.message(Command("start"))
+async def start(message: types.Message):
+    await message.answer(
+        "Привіт! Я бот, який може працювати з англійською, українською та німецькою мовами. "
+        "Ви також можете додавати петиції через /gpetition і переглядати список петицій через /lpetition."
+    )
 
-    for p in petitions:
-        updated_info = get_petition_info(p["url"])  # Отримуємо актуальні дані
-        if updated_info:
-            cursor.execute('''UPDATE petitions 
-                              SET votes_collected = ?, days_remaining = ? 
-                              WHERE url = ?''',
-                           (updated_info['votes_collected'], updated_info['days_remaining'], p["url"]))
-    
-    conn.commit()
-    conn.close()
+# Обробка повідомлень (виклик нейронної мережі для генерації відповіді)
+@router.message()
+async def chat(message: types.Message):
+    user_message = message.text
+    language = 'en'
 
-# Додавання нової петиції командою /gpetition
+    if any(c.isalpha() for c in user_message):
+        if "український" in user_message or "українська" in user_message:
+            language = 'uk'
+        elif "німецький" in user_message or "німецька" in user_message:
+            language = 'de'
+        else:
+            language = 'en'
+
+    # Отримуємо відповідь від GPT
+    response = await get_gpt_response(user_message, language)
+    await message.answer(response)
+
+# Команда /gpetition для додавання петиції
 @router.message(Command("gpetition"))
 async def add_petition(message: types.Message):
     url = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
@@ -106,12 +121,10 @@ async def add_petition(message: types.Message):
     else:
         await message.answer("❌ Не вдалося отримати інформацію про петицію.")
 
-# Відображення списку петицій командою /lpetition
+# Команда /lpetition для перегляду петицій
 @router.message(Command("lpetition"))
 async def list_petitions(message: types.Message):
-    update_petition_info()  # Оновлюємо інформацію перед виведенням
     petitions = get_petitions()
-
     if not petitions:
         await message.answer("📝 Наразі немає жодної доданої петиції.")
         return
@@ -122,11 +135,25 @@ async def list_petitions(message: types.Message):
     
     await message.answer(result, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
+# Отримання інформації про петицію
+def get_petition_info(url: str):
+    response = requests.get(url)
+    if response.status_code != 200:
+        return None
+    
+    soup = BeautifulSoup(response.text, 'html.parser')
+    title = soup.select_one("h1").text.strip()
+    votes_collected = int(soup.select_one(".petition_votes_txt span").text.strip().replace(" ", ""))
+    days_remaining_text = soup.select_one(".votes_progress_label").text.strip()
+    days_remaining = int(''.join(filter(str.isdigit, days_remaining_text)))
+    
+    return {"title": title, "votes_collected": votes_collected, "days_remaining": days_remaining, "url": url}
+
 # Запуск бота
 async def main():
     init_db()
     dp.include_router(router)
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
