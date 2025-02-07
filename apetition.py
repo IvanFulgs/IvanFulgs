@@ -1,19 +1,20 @@
 import requests
-import sqlite3
+import json
 import logging
-import os
-from aiogram import Bot, Dispatcher, types
+import asyncio
+import sqlite3
+from bs4 import BeautifulSoup
+from aiogram import Bot, Dispatcher, types, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import ParseMode
-from aiogram.utils import executor
-from bs4 import BeautifulSoup
+import os
 
 # Ваш токен Telegram-бота
 TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+router = Router()
 
 BASE_URL = "https://petition.president.gov.ua"
 TARGET_VOTES = 25000
@@ -34,6 +35,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Збереження петиції в БД
 def save_petition(petition):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -43,6 +45,7 @@ def save_petition(petition):
     conn.commit()
     conn.close()
 
+# Отримання всіх петицій з БД
 def get_petitions():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -51,6 +54,7 @@ def get_petitions():
     conn.close()
     return [{"title": row[0], "votes_collected": row[1], "days_remaining": row[2], "url": row[3]} for row in petitions]
 
+# Парсинг інформації про петицію
 def get_petition_info(url: str):
     response = requests.get(url)
     if response.status_code != 200:
@@ -64,24 +68,26 @@ def get_petition_info(url: str):
     
     return {"title": title, "votes_collected": votes_collected, "days_remaining": days_remaining, "url": url}
 
-# Команда /start
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    await message.answer("Привіт! Я бот для управління петиціями. Використовуй команду /help для отримання списку команд.")
+# Оновлення інформації у базі перед відправкою списку
+def update_petition_info():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
 
-# Команда /help
-@dp.message_handler(commands=["help"])
-async def help(message: types.Message):
-    await message.answer(
-        "Ось доступні команди:\n"
-        "/start — Привітання\n"
-        "/help — Допомога\n"
-        "/gpetition <url> — Додати петицію\n"
-        "/lpetition — Переглянути список петицій"
-    )
+    petitions = get_petitions()  # Отримуємо всі збережені петиції
 
-# Команда /gpetition — додавання петиції
-@dp.message_handler(commands=["gpetition"])
+    for p in petitions:
+        updated_info = get_petition_info(p["url"])  # Отримуємо актуальні дані
+        if updated_info:
+            cursor.execute('''UPDATE petitions 
+                              SET votes_collected = ?, days_remaining = ? 
+                              WHERE url = ?''',
+                           (updated_info['votes_collected'], updated_info['days_remaining'], p["url"]))
+    
+    conn.commit()
+    conn.close()
+
+# Додавання нової петиції командою /gpetition
+@router.message(Command("gpetition"))
 async def add_petition(message: types.Message):
     url = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
     if not url:
@@ -100,10 +106,12 @@ async def add_petition(message: types.Message):
     else:
         await message.answer("❌ Не вдалося отримати інформацію про петицію.")
 
-# Команда /lpetition — перегляд списку петицій
-@dp.message_handler(commands=["lpetition"])
+# Відображення списку петицій командою /lpetition
+@router.message(Command("lpetition"))
 async def list_petitions(message: types.Message):
+    update_petition_info()  # Оновлюємо інформацію перед виведенням
     petitions = get_petitions()
+
     if not petitions:
         await message.answer("📝 Наразі немає жодної доданої петиції.")
         return
@@ -114,10 +122,11 @@ async def list_petitions(message: types.Message):
     
     await message.answer(result, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
+# Запуск бота
 async def main():
     init_db()
-    await dp.start_polling()
+    dp.include_router(router)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
