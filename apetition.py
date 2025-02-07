@@ -35,6 +35,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Збереження петиції в БД
 def save_petition(petition):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -44,6 +45,7 @@ def save_petition(petition):
     conn.commit()
     conn.close()
 
+# Отримання всіх петицій з БД
 def get_petitions():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -52,6 +54,7 @@ def get_petitions():
     conn.close()
     return [{"title": row[0], "votes_collected": row[1], "days_remaining": row[2], "url": row[3]} for row in petitions]
 
+# Парсинг інформації про петицію
 def get_petition_info(url: str):
     response = requests.get(url)
     if response.status_code != 200:
@@ -65,6 +68,25 @@ def get_petition_info(url: str):
     
     return {"title": title, "votes_collected": votes_collected, "days_remaining": days_remaining, "url": url}
 
+# Оновлення інформації у базі перед відправкою списку
+def update_petition_info():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    petitions = get_petitions()  # Отримуємо всі збережені петиції
+
+    for p in petitions:
+        updated_info = get_petition_info(p["url"])  # Отримуємо актуальні дані
+        if updated_info:
+            cursor.execute('''UPDATE petitions 
+                              SET votes_collected = ?, days_remaining = ? 
+                              WHERE url = ?''',
+                           (updated_info['votes_collected'], updated_info['days_remaining'], p["url"]))
+    
+    conn.commit()
+    conn.close()
+
+# Додавання нової петиції командою /gpetition
 @router.message(Command("gpetition"))
 async def add_petition(message: types.Message):
     url = message.text.split(maxsplit=1)[1] if len(message.text.split()) > 1 else None
@@ -84,9 +106,12 @@ async def add_petition(message: types.Message):
     else:
         await message.answer("❌ Не вдалося отримати інформацію про петицію.")
 
+# Відображення списку петицій командою /lpetition
 @router.message(Command("lpetition"))
 async def list_petitions(message: types.Message):
+    update_petition_info()  # Оновлюємо інформацію перед виведенням
     petitions = get_petitions()
+
     if not petitions:
         await message.answer("📝 Наразі немає жодної доданої петиції.")
         return
@@ -97,6 +122,7 @@ async def list_petitions(message: types.Message):
     
     await message.answer(result, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
+# Запуск бота
 async def main():
     init_db()
     dp.include_router(router)
