@@ -10,7 +10,7 @@ from aiogram.filters import Command
 import os
 
 # Ваш токен Telegram-бота
-TOKEN = "7456919381:AAHaDhp8lMC5hKrVgVLEjwliGJ7eXE2AUX0"
+TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
