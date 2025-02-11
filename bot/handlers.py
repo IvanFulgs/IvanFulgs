@@ -3,6 +3,9 @@ from telegram.ext import CallbackContext
 from database.db import SessionLocal
 from database.models import User, Purchase
 
+touch /app/bot/__init__.py
+touch /app/bot/handlers/__init__.py
+
 def get_or_create_user(telegram_id, username):
     session = SessionLocal()
     user = session.query(User).filter_by(telegram_id=telegram_id).first()
