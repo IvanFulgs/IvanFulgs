@@ -20,8 +20,8 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt
 
-# Открываем порт (если бот слушает вебхуки, например в Telegram)
+# Открываем порт (если нужно)
 EXPOSE 8443
 
-# Запускаем бота (замените на свою команду)
+# Запускаем приложение (замените на свою команду)
 CMD ["python", "app.py"]
