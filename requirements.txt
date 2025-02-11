@@ -1,4 +1,4 @@
-python-telegram-bot
-sqlalchemy
-asyncpg
-dotenv
+python-telegram-bot==20.0  # Укажите конкретную версию
+asyncpg==0.25.0  # Укажите конкретную версию
+sqlalchemy==1.4.22  # Укажите конкретную версию
+python-dotenv==0.19.0  # Укажите конкретную версию
